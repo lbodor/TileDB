@@ -540,10 +540,10 @@ class Array {
    * and the timestamp to use when creating fragments, metadata, etc. This may
    * be changed by the user at any time.
    *
-   * Timestamps are ms elapsed since 1970-01-01 00:00:00 +0000 (UTC). A value of
-   * UINT64_MAX will be interpretted as the current timestamp.
+   * Timestamps are ms elapsed since 1970-01-01 00:00:00 +0000 (UTC). If set to
+   * `nullopt`, use the current time.
    */
-  uint64_t user_set_timestamp_end_;
+  optional<uint64_t> user_set_timestamp_end_;
 
   /**
    * Ending timestamp to open fragments between.
@@ -554,14 +554,13 @@ class Array {
   uint64_t array_dir_timestamp_end_;
 
   /**
-   * The timestamp to use when creating fragments, metadata, etc.
+   * The timestamp to use when creating fragments, delete/update commits,
+   * metadata, etc.
    *
-   *  - Set to a sentinel value of UINT64_MAX before the array is opened.
-   *  - Set to a sentinal value of 0 if using the current timestamp.
-   *
-   * Timestamps are ms elapsed since 1970-01-01 00:00:00 +0000 (UTC).
+   * Timestamps are ms elapsed since 1970-01-01 00:00:00 +0000 (UTC). If set to
+   * `nullopt`, use the current time.
    */
-  uint64_t new_component_timestamp_;
+  optional<uint64_t> new_component_timestamp_;
 
   /** TileDB storage manager. */
   StorageManager* storage_manager_;

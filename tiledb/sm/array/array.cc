@@ -81,9 +81,9 @@ Array::Array(
     , is_open_(false)
     , is_opening_or_closing_(false)
     , array_dir_timestamp_start_(0)
-    , user_set_timestamp_end_(UINT64_MAX)
+    , user_set_timestamp_end_(nullopt)
     , array_dir_timestamp_end_(UINT64_MAX)
-    , new_component_timestamp_(UINT64_MAX)
+    , new_component_timestamp_(nullopt)
     , storage_manager_(storage_manager)
     , config_(storage_manager_->config())
     , remote_(array_uri.is_tiledb())
@@ -234,7 +234,7 @@ Status Array::open(
   return Array::open(
       query_type,
       array_dir_timestamp_start_,
-      user_set_timestamp_end_,
+      user_set_timestamp_end_.value_or(UINT64_MAX),
       encryption_type,
       encryption_key,
       key_length);
@@ -251,16 +251,31 @@ Status Array::open(
   // Checks
   if (is_open()) {
     return LOG_STATUS(
-        Status_ArrayError("Cannot open array; Array already open"));
+        Status_ArrayError("Cannot open array; Array already open."));
   }
 
   metadata_.clear();
   metadata_loaded_ = false;
   non_empty_domain_computed_ = false;
-  array_dir_timestamp_start_ = timestamp_start;
-  array_dir_timestamp_end_ = timestamp_end;
-  new_component_timestamp_ = timestamp_end;
   query_type_ = query_type;
+
+  // Set timestamps.
+  // * `timestamp_end == UINT64_MAX`:
+  //     The array directory end timestamp will be set to the current time if
+  //     querying in read mode and the new component timestamp will use the
+  //     current time.
+  // * `timestamp_end` == 0:
+  //     The new component timestamp will use the current time.
+  array_dir_timestamp_start_ = timestamp_start;
+  array_dir_timestamp_end_ =
+      (timestamp_end == UINT64_MAX && query_type_ == QueryType::READ) ?
+          utils::time::timestamp_now_ms() :
+          timestamp_end;
+  if (timestamp_end == 0 || timestamp_end == UINT64_MAX) {
+    new_component_timestamp_ = nullopt;
+  } else {
+    new_component_timestamp_ = timestamp_end;
+  }
 
   /* Note: the open status MUST be exception safe. If anything interrupts the
    * opening process, it will throw and the array will be set as closed. */
@@ -329,21 +344,6 @@ Status Array::open(
     st = encryption_key_->set_key(encryption_type, encryption_key, key_length);
     if (!st.ok()) {
       throw StatusException(st);
-    }
-
-    if (timestamp_end == UINT64_MAX) {
-      if (query_type == QueryType::READ) {
-        array_dir_timestamp_end_ = utils::time::timestamp_now_ms();
-        new_component_timestamp_ = 0;
-      } else if (
-          query_type == QueryType::WRITE ||
-          query_type == QueryType::MODIFY_EXCLUSIVE ||
-          query_type == QueryType::DELETE || query_type == QueryType::UPDATE) {
-        array_dir_timestamp_end_ = UINT64_MAX;
-        new_component_timestamp_ = 0;
-      } else {
-        throw Status_ArrayError("Cannot open array; Unsupported query type.");
-      }
     }
 
     if (remote_) {
@@ -754,19 +754,19 @@ const EncryptionKey& Array::get_encryption_key() const {
 }
 
 Status Array::reopen() {
-  // Note: Timestamp will only reopen for reads. This is why we are checking the
+  // Note: Array will only reopen for reads. This is why we are checking the
   // timestamp for the array directory and not new components. This needs to be
   // updated if non-read timestamps are added to the ``reopen(timestamp_start,
   // timestamp_end)`` below.
-
-  if (user_set_timestamp_end_ == array_dir_timestamp_end_) {
-    // The user has not set `timestamp_end_` since it was last opened.
-    // In this scenario, re-open at the current timestamp.
+  if (!user_set_timestamp_end_.has_value() ||
+      user_set_timestamp_end_.value() == array_dir_timestamp_end_) {
+    // The user has not set `timestamp_end_` since it was last opened or set it
+    // to use the current timestamp. In this scenario, re-open at the current
+    // timestamp.
     return reopen(array_dir_timestamp_start_, utils::time::timestamp_now_ms());
   } else {
-    // The user has changed the end timestamp or it is set to UINT64_MAX. Reopen
-    // at the user set timestamp.
-    return reopen(array_dir_timestamp_start_, user_set_timestamp_end_);
+    // The user has changed the end timestamp. Reopen at the user set timestamp.
+    return reopen(array_dir_timestamp_start_, user_set_timestamp_end_.value());
   }
 }
 
@@ -783,11 +783,15 @@ Status Array::reopen(uint64_t timestamp_start, uint64_t timestamp_end) {
 
   // Update the user set timestamp and the timestamp range to pass to the array
   // directory.
-  user_set_timestamp_end_ = timestamp_end;
+  if (timestamp_end == UINT64_MAX) {
+    user_set_timestamp_end_ = nullopt;
+    array_dir_timestamp_end_ = utils::time::timestamp_now_ms();
+
+  } else {
+    user_set_timestamp_end_ = timestamp_end;
+    array_dir_timestamp_end_ = timestamp_end;
+  }
   array_dir_timestamp_start_ = timestamp_start;
-  array_dir_timestamp_end_ = timestamp_end == UINT64_MAX ?
-                                 utils::time::timestamp_now_ms() :
-                                 timestamp_end;
 
   // Reset the last max buffer sizes.
   clear_last_max_buffer_sizes();
@@ -844,22 +848,25 @@ uint64_t Array::timestamp_start() const {
 }
 
 Status Array::set_timestamp_end(const uint64_t timestamp_end) {
-  user_set_timestamp_end_ = timestamp_end;
+  if (timestamp_end == UINT64_MAX) {
+    user_set_timestamp_end_ = nullopt;
+  } else {
+    user_set_timestamp_end_ = timestamp_end;
+  }
   return Status::Ok();
 }
 
 uint64_t Array::timestamp_end() const {
-  return user_set_timestamp_end_;
+  return user_set_timestamp_end_.value_or(UINT64_MAX);
 }
 
 uint64_t Array::timestamp_end_opened_at() const {
   return query_type_ == QueryType::READ ? array_dir_timestamp_end_ :
-                                          new_component_timestamp_;
+                                          new_component_timestamp_.value_or(0);
 }
 
 uint64_t Array::timestamp_for_new_component() const {
-  return new_component_timestamp_ == 0 ? utils::time::timestamp_now_ms() :
-                                         new_component_timestamp_;
+  return new_component_timestamp_.value_or(utils::time::timestamp_now_ms());
 }
 
 Status Array::set_config(Config config) {
