@@ -575,6 +575,7 @@ Status ReaderBase::read_tiles(
   // Run all tiles and attributes.
   for (auto name : names) {
     for (auto tile : result_tiles) {
+      auto timer_this_loop = stats_->start_timer("kerl_read_tiles_result_tile");
       // For each tile, read from its fragment.
       auto const fragment = fragment_metadata_[tile->frag_idx()];
 
@@ -649,6 +650,7 @@ Status ReaderBase::read_tiles(
       uint64_t tile_attr_offset;
       RETURN_NOT_OK(fragment->file_offset(name, tile_idx, &tile_attr_offset));
       if (!disable_cache_) {
+        auto timer_rfc = stats_->start_timer("kerl_cache_hit_read_tiles_read_from_cache");
         RETURN_NOT_OK(storage_manager_->read_from_cache(
             *tile_attr_uri,
             tile_attr_offset,
@@ -658,12 +660,15 @@ Status ReaderBase::read_tiles(
       }
 
       if (!cache_hit) {
+        stats_->add_counter("kerl_emplace_read_ttr", 1);
+
         // Add the region of the fragment to be read.
         all_regions[*tile_attr_uri].emplace_back(
             tile_attr_offset, t, tile_sizes.tile_persisted_size());
       }
 
       if (var_size) {
+        auto timer_rfc = stats_->start_timer("kerl_read_tiles_var_size");
         auto&& [status, tile_attr_var_uri] = fragment->var_uri(name);
         RETURN_NOT_OK(status);
 
@@ -681,6 +686,8 @@ Status ReaderBase::read_tiles(
 
         if (!cache_hit) {
           // Add the region of the fragment to be read.
+          stats_->add_counter("kerl_emplace_read_var", 1);
+
           all_regions[*tile_attr_var_uri].emplace_back(
               tile_attr_var_offset,
               t_var,
@@ -689,6 +696,7 @@ Status ReaderBase::read_tiles(
       }
 
       if (nullable) {
+        auto timer_rfc = stats_->start_timer("kerl_read_tiles_nullable");
         auto&& [status, tile_validity_attr_uri] = fragment->validity_uri(name);
         RETURN_NOT_OK(status);
 
@@ -696,6 +704,7 @@ Status ReaderBase::read_tiles(
         RETURN_NOT_OK(fragment->file_validity_offset(
             name, tile_idx, &tile_attr_validity_offset));
         if (!disable_cache_) {
+          auto timer_rfc = stats_->start_timer("kerl_nullable_read_tiles_read_from_cache");
           RETURN_NOT_OK(storage_manager_->read_from_cache(
               *tile_validity_attr_uri,
               tile_attr_validity_offset,
@@ -705,6 +714,8 @@ Status ReaderBase::read_tiles(
         }
 
         if (!cache_hit) {
+          stats_->add_counter("kerl_emplace_read_validity", 1);
+
           // Add the region of the fragment to be read.
           all_regions[*tile_validity_attr_uri].emplace_back(
               tile_attr_validity_offset,
@@ -727,6 +738,7 @@ Status ReaderBase::read_tiles(
   // Enqueue all regions to be read.
   for (const auto& item : all_regions) {
     if (disable_batching_) {
+      auto timer_foo = stats_->start_timer("kerl_read_tiles_disable_batching");
       RETURN_NOT_OK(storage_manager_->vfs()->read_all_no_batching(
           item.first,
           item.second,
@@ -734,6 +746,7 @@ Status ReaderBase::read_tiles(
           &tasks,
           use_read_ahead));
     } else {
+      auto timer_foo = stats_->start_timer("kerl_read_tiles_no_disable_batching");
       RETURN_NOT_OK(storage_manager_->vfs()->read_all(
           item.first,
           item.second,
@@ -743,10 +756,13 @@ Status ReaderBase::read_tiles(
     }
   }
 
-  // Wait for the reads to finish and check statuses.
-  auto statuses = storage_manager_->io_tp()->wait_all_status(tasks);
-  for (const auto& st : statuses)
-    RETURN_CANCEL_OR_ERROR(st);
+  {
+    auto timer_wa = stats_->start_timer("kerl_read_tiles_wait_all_status");
+    // Wait for the reads to finish and check statuses.
+    auto statuses = storage_manager_->io_tp()->wait_all_status(tasks);
+    for (const auto& st : statuses)
+      RETURN_CANCEL_OR_ERROR(st);
+  }
 
   return Status::Ok();
 }
