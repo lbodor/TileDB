@@ -198,6 +198,7 @@ uint64_t Reader::get_timestamp(const ResultCoords& rc) const {
 }
 
 Status Reader::dowork() {
+  printf("READER::DOWORK ENTER\n");
   auto timer_se = stats_->start_timer("dowork");
 
   // Check that the query condition is valid.

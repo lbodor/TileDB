@@ -158,7 +158,9 @@ Status SparseGlobalOrderReader<BitmapType>::initialize_memory_budget() {
 
 template <class BitmapType>
 Status SparseGlobalOrderReader<BitmapType>::dowork() {
-  auto timer_se = stats_->start_timer("dowork");
+  printf("SGOR::DOWORK ENTER\n");
+  auto timer_wtfc = stats_->start_timer("dowork");
+  auto timer_se = stats_->start_timer("wtfc");
 
   // For easy reference.
   auto fragment_num = fragment_metadata_.size();
@@ -197,6 +199,8 @@ Status SparseGlobalOrderReader<BitmapType>::dowork() {
   buffers_full_ = false;
   do {
     stats_->add_counter("loop_num", 1);
+    printf("\n");
+    printf("SGOR::DOWORK LOOP_NUM\n");
 
     // Create the result tiles we are going to process.
     auto tiles_found = create_result_tiles();
@@ -380,10 +384,13 @@ bool SparseGlobalOrderReader<BitmapType>::add_result_tile(
 template <class BitmapType>
 bool SparseGlobalOrderReader<BitmapType>::create_result_tiles() {
   auto timer_se = stats_->start_timer("create_result_tiles");
+  printf("SGOR::CREATE_RESULT_TILES ENTER\n");
 
   // For easy reference.
   auto fragment_num = fragment_metadata_.size();
+  printf("SGOR::CREATE_RESULT_TILES FRAGMENT_NUM=%lld\n", (long long)fragment_num);
   auto dim_num = array_schema_.dim_num();
+  printf("SGOR::CREATE_RESULT_TILES DIM_NUM=%lld\n", (long long)dim_num);
 
   // Get the number of fragments to process.
   unsigned num_fragments_to_process = 0;
@@ -396,6 +403,7 @@ bool SparseGlobalOrderReader<BitmapType>::create_result_tiles() {
   per_fragment_qc_memory_ = memory_budget_ *
                             memory_budget_ratio_query_condition_ /
                             num_fragments_to_process;
+  printf("SGOR::CREATE_RESULT_TILES PER_FRAGMENT_MEMORY=%lld\n", (long long)per_fragment_memory_);
 
   // Create result tiles.
   bool tiles_found = false;
@@ -454,6 +462,7 @@ bool SparseGlobalOrderReader<BitmapType>::create_result_tiles() {
         storage_manager_->compute_tp(), 0, fragment_num, [&](uint64_t f) {
           uint64_t t = 0;
           auto tile_num = fragment_metadata_[f]->tile_num();
+          printf("SGOR::CREATE_RESULT_TILES TILE_NUM %lld\n", (long long)tile_num);
 
           // Figure out the start index.
           auto start = read_state_.frag_idx_[f].tile_idx_;
@@ -503,8 +512,10 @@ bool SparseGlobalOrderReader<BitmapType>::create_result_tiles() {
   uint64_t num_rt = 0;
   for (unsigned int f = 0; f < fragment_num; f++) {
     num_rt += result_tiles_[f].size();
+    //printf("SGOR::CREATE_RESULT_TILES NUM_RT[%lld] = %lld\n", (long long)f, (long long)result_tiles_[f].size());
     done_adding_result_tiles &= all_tiles_loaded_[f] != 0;
   }
+  printf("SGOR::CREATE_RESULT_TILES NUM_RT = %lld\n", (long long)num_rt);
 
   logger_->debug("Done adding result tiles, num result tiles {0}", num_rt);
 
@@ -2023,7 +2034,7 @@ Status SparseGlobalOrderReader<BitmapType>::remove_result_tile(
 
   // Delete the tile.
   result_tiles_[frag_idx].erase(rt);
-
+  // XXX printf("SGOR::REMOVE_RESULT_TILE %lld\n", (long long)rt->tile_idx());
   return Status::Ok();
 }
 

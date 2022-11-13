@@ -158,6 +158,7 @@ Status DenseReader::complete_read_loop() {
 }
 
 Status DenseReader::dowork() {
+  printf("DENSEREADER::DOWORK ENTER\n");
   auto timer_se = stats_->start_timer("dowork");
 
   // Check that the query condition is valid.

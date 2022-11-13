@@ -392,6 +392,7 @@ Status SparseIndexReaderBase::load_initial_data() {
 
 Status SparseIndexReaderBase::read_and_unfilter_coords(
     const std::vector<ResultTile*>& result_tiles) {
+  printf("SIRB::READ_AND_UNFILTER_COORDS\n");
   auto timer_se = stats_->start_timer("read_and_unfilter_coords");
 
   if (include_coords_) {
@@ -444,6 +445,7 @@ Status SparseIndexReaderBase::read_and_unfilter_coords(
 template <class BitmapType>
 Status SparseIndexReaderBase::compute_tile_bitmaps(
     std::vector<ResultTile*>& result_tiles) {
+  printf("SIRB::COMPUTE_TILE_BITMAPS\n");
   auto timer_se = stats_->start_timer("compute_tile_bitmaps");
 
   // For easy reference.
