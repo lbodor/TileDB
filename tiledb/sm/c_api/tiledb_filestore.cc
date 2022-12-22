@@ -185,12 +185,12 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
     return TILEDB_ERR;
   }
 
-  tiledb::sm::Context context = ctx->context();
+  tiledb::sm::Context& context = ctx->context();
 
   // Get the file size
   tiledb::sm::VFS vfs(context.stats(), context.compute_tp(), context.io_tp(), context.storage_manager()->config());
   uint64_t file_size;
-  throw_if_not_ok(vfs.file_size(tiledb::sm::URI(uri), &file_size));
+  throw_if_not_ok(vfs.file_size(tiledb::sm::URI(file_uri), &file_size));
   if (!file_size) {
     return TILEDB_OK;  // NOOP
   }
@@ -232,37 +232,36 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
 
   // We need to dump all the relevant metadata at this point so that
   // clients have all the necessary info when consuming the array
-  array->put_metadata(
+  throw_if_not_ok(array->put_metadata(
       tiledb::sm::constants::filestore_metadata_size_key.c_str(),
       tiledb::sm::Datatype::UINT64,
       1,
-      &file_size);
-  array->put_metadata(
+      &file_size));
+  throw_if_not_ok(array->put_metadata(
       tiledb::sm::constants::filestore_metadata_mime_encoding_key.c_str(),
       tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(mime_encoding.value().size()),
-      mime_encoding.value().c_str());
-  array->put_metadata(
+      mime_encoding.value().c_str()));
+  throw_if_not_ok(array->put_metadata(
       tiledb::sm::constants::filestore_metadata_mime_type_key.c_str(),
       tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(mime.value().size()),
-      mime.value().c_str());
+      mime.value().c_str()));
   auto&& [fname, fext] = strip_file_extension(file_uri);
-  array->put_metadata(
+  throw_if_not_ok(array->put_metadata(
       tiledb::sm::constants::filestore_metadata_original_filename_key.c_str(),
       tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(fname.size()),
-      fname.c_str());
-  array->put_metadata(
+      fname.c_str()));
+  throw_if_not_ok(array->put_metadata(
       tiledb::sm::constants::filestore_metadata_file_extension_key.c_str(),
       tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(fext.size()),
-      fext.c_str());
+      fext.c_str()));
 
   // Write the data in batches using the global order writer
-  tiledb::sm::VFS fb(vfs);
-  auto fb_open_status = fb.open(tiledb::sm::URI(file_uri), tiledb::sm::VFSMode::VFS_READ);
-  if (!fb.ok()) {
+  auto fb_open_status = vfs.open_file(tiledb::sm::URI(file_uri), tiledb::sm::VFSMode::VFS_READ);
+  if (!fb_open_status.ok()) {
     auto st = Status_Error(
         "Failed to open the file; Invalid file URI or incorrect file "
         "permissions");
@@ -284,16 +283,16 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
     return TILEDB_ERR;
   }
 
-  tiledb::sm::Query query(context.storage_manager(), array, tiledb::sm::QueryType::WRITE);
-  query.set_layout(tiledb::sm::Layout::GLOBAL_ORDER);
+  tiledb::sm::Query query(context.storage_manager(), array);
+  throw_if_not_ok(query.set_layout(tiledb::sm::Layout::GLOBAL_ORDER));
   std::vector<std::byte> buffer(*buffer_size);
 
   tiledb::sm::Subarray subarray(
     array.get(), 
     nullptr, 
-    context.storage_manager->logger(), 
+    context.storage_manager()->logger(), 
     true,
-    ctx->storage_manager());
+    context.storage_manager());
   // We need to get the right end boundary of the last space tile.
   // The last chunk either falls exactly on the end of the file
   // or it goes beyond the end of the file so that it's equal in size
@@ -303,52 +302,55 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
        static_cast<uint64_t>(file_size % tile_extent != 0)) *
           tile_extent -
       1;
-  tiledb::type::Range subarray_range(static_cast<uint64_t>(0), last_space_tile_boundary);
-  subarray.add_range(0, static_cast<uint64_t>(0), std::move(subarray_range));
+  uint64_t range_arr[] = {static_cast<uint64_t>(0), last_space_tile_boundary};
+  tiledb::type::Range subarray_range(static_cast<void*>(range_arr), sizeof(uint64_t) * 2);
+  throw_if_not_ok(subarray.add_range(0, std::move(subarray_range)));
   query.set_subarray(subarray);
 
   auto tiledb_cloud_fix = [&](uint64_t start, uint64_t end, uint64_t nbytes) {
-    tiledb::sm::Query query(context.storage_manager(), array, tiledb::sm::QueryType::WRITE);
-    query.set_layout(tiledb::sm::Layout::ROW_MAJOR);
+    tiledb::sm::Query query(context.storage_manager(), array);
+    throw_if_not_ok(query.set_layout(tiledb::sm::Layout::ROW_MAJOR));
     tiledb::sm::Subarray subarray_cloud_fix(
       array.get(), 
       nullptr, 
-      context.storage_manager->logger(), 
+      context.storage_manager()->logger(), 
       true,
-      ctx->storage_manager());
+      context.storage_manager());
 
-    tiledb::type::Range subarray_range_cloud_fix(start, end);
-    subarray_cloud_fix.add_range(0, std::move(subarray_range_cloud_fix));
+    uint64_t cloud_fix_range_arr[] = {start, end};
+    tiledb::type::Range subarray_range_cloud_fix(static_cast<void*>(cloud_fix_range_arr), sizeof(uint64_t) * 2);
+    throw_if_not_ok(subarray_cloud_fix.add_range(0, std::move(subarray_range_cloud_fix)));
     query.set_subarray(subarray_cloud_fix);
-    query.set_data_buffer(
-        tiledb::sm::constants::filestore_attribute_name, buffer.data(), nbytes);
-    query.submit();
+    throw_if_not_ok(query.set_data_buffer(
+        tiledb::sm::constants::filestore_attribute_name, buffer.data(), &nbytes));
+    throw_if_not_ok(query.submit());
   };
 
   uint64_t start_range = 0;
   uint64_t end_range = *buffer_size - 1;
   // TODO: very unsure about this section of code.
-  while (fb.read(tiledb::sm::URI(uri), start_range, reinterpret_cast<char*>(buffer.data()), *buffer_size).ok()) {
+  uint64_t buffer_size_tmp = *buffer_size;
+  while (vfs.read(tiledb::sm::URI(file_uri), start_range, reinterpret_cast<char*>(buffer.data()), *buffer_size).ok()) {
     if (is_tiledb_uri) {
       tiledb_cloud_fix(start_range, end_range, buffer.size());
       start_range += *buffer_size;
       end_range += *buffer_size;
     } else {
-      query.set_data_buffer(
+      throw_if_not_ok(query.set_data_buffer(
           tiledb::sm::constants::filestore_attribute_name,
           buffer.data(),
-          *buffer_size);
-      query.submit();
+          &buffer_size_tmp));
+      throw_if_not_ok(query.submit());
     }
   }
 
-  // YEET
-
+  // HERE
   // If the end of the file was reached, but less than buffer_size bytes
   // were read, write the read bytes into the array.
   // Check input.gcount() to guard against the case when file_size is
   // a multiple of buffer_size, thus eof gets set but there are no more
   // bytes to read
+  /*
   if (input.eof() && input.gcount() > 0) {
     size_t read_bytes = input.gcount();
     // Initialize the remaining empty cells to 0
@@ -372,16 +374,16 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
     fb.close();
     return TILEDB_ERR;
   }
+  */
 
   if (!is_tiledb_uri) {
     // Dump the fragment on disk
-    query.finalize();
+    throw_if_not_ok(query.finalize());
   }
-  fb.close();
+  throw_if_not_ok(vfs.close_file(tiledb::sm::URI(file_uri)));
 
   return TILEDB_OK;
 }
-
 /*
 TILEDB_EXPORT int32_t tiledb_filestore_uri_export(
     tiledb_ctx_t* ctx, const char* file_uri, const char* filestore_array_uri) {
@@ -471,6 +473,7 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_export(
 
   return TILEDB_OK;
 }
+*/
 
 TILEDB_EXPORT int32_t tiledb_filestore_buffer_import(
     tiledb_ctx_t* ctx,
@@ -488,12 +491,18 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_import(
     return TILEDB_OK;  // NOOP
   }
 
-  Context context(ctx, false);
+  tiledb::sm::Context& context = ctx->context();
 
   // Sync up the fragment timestamp and metadata timestamp
   uint64_t time_now = tiledb_timestamp_now_ms();
-  Array array(
-      context, std::string(filestore_array_uri), TILEDB_WRITE, time_now);
+  auto array = make_shared<tiledb::sm::Array>(HERE(), tiledb::sm::URI(filestore_array_uri), context.storage_manager());
+  throw_if_not_ok(array->open(
+    tiledb::sm::QueryType::WRITE,
+    0,
+    time_now,
+    tiledb::sm::EncryptionType::NO_ENCRYPTION, 
+    nullptr, 
+    0));
 
   // Detect mimetype and encoding with libmagic
   uint64_t s = std::min(size, static_cast<size_t>(1024));
@@ -512,42 +521,51 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_import(
 
   // We need to dump all the relevant metadata at this point so that
   // clients have all the necessary info when consuming the array
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_size_key,
-      TILEDB_UINT64,
+  throw_if_not_ok(array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_size_key.c_str(),
+      tiledb::sm::Datatype::UINT64,
       1,
-      &size);
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_mime_encoding_key,
-      TILEDB_STRING_UTF8,
+      &size));
+  throw_if_not_ok(array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_mime_encoding_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(mime_encoding.value().size()),
-      mime_encoding.value().c_str());
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_mime_type_key,
-      TILEDB_STRING_UTF8,
+      mime_encoding.value().c_str()));
+  throw_if_not_ok(array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_mime_type_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(mime.value().size()),
-      mime.value().c_str());
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_original_filename_key,
-      TILEDB_STRING_UTF8,
+      mime.value().c_str()));
+  throw_if_not_ok(array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_original_filename_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(0),
-      "");
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_file_extension_key,
-      TILEDB_STRING_UTF8,
+      ""));
+  throw_if_not_ok(array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_file_extension_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(0),
-      "");
+      ""));
 
-  Query query(context, array);
-  query.set_layout(TILEDB_ROW_MAJOR);
+  // yeet
+  tiledb::sm::Query query(context.storage_manager(), array);
+  throw_if_not_ok(query.set_layout(tiledb::sm::Layout::ROW_MAJOR));
 
-  Subarray subarray(context, array);
-  subarray.add_range(
-      0, static_cast<uint64_t>(0), static_cast<uint64_t>(size - 1));
+  tiledb::sm::Subarray subarray(
+      array.get(), 
+      nullptr, 
+      context.storage_manager()->logger(), 
+      true,
+      context.storage_manager());
+  uint64_t subarray_range_arr[] = {static_cast<uint64_t>(0), static_cast<uint64_t>(size - 1)};
+  tiledb::type::Range subarray_range(static_cast<void*>(subarray_range_arr), sizeof(uint64_t) * 2);
+  throw_if_not_ok(subarray.add_range(0, std::move(subarray_range)));
+
   query.set_subarray(subarray);
-  query.set_data_buffer(
-      tiledb::sm::constants::filestore_attribute_name, buf, size);
-  query.submit();
+  uint64_t size_tmp = size;
+  throw_if_not_ok(query.set_data_buffer(
+      tiledb::sm::constants::filestore_attribute_name, buf, &size_tmp));
+  throw_if_not_ok(query.submit());
 
   return TILEDB_OK;
 }
@@ -562,21 +580,25 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_export(
     return TILEDB_ERR;
   }
 
-  Context context(ctx, false);
-
-  Array array(context, std::string(filestore_array_uri), TILEDB_READ);
+  tiledb::sm::Context& context = ctx->context();
+  auto array = make_shared<tiledb::sm::Array>(HERE(), tiledb::sm::URI(filestore_array_uri), context.storage_manager());
+  throw_if_not_ok(array->open(
+    tiledb::sm::QueryType::READ,
+    tiledb::sm::EncryptionType::NO_ENCRYPTION, 
+    nullptr, 
+    0));
 
   // Check whether the user requested more data than the array contains.
   // Return an error if that's the case.
   // This is valid only when the array metadata contains the file_size key
-  tiledb_datatype_t dtype;
+  tiledb::sm::Datatype dtype;
   uint32_t num;
   const void* file_size;
-  array.get_metadata(
-      tiledb::sm::constants::filestore_metadata_size_key,
+  throw_if_not_ok(array->get_metadata(
+      tiledb::sm::constants::filestore_metadata_size_key.c_str(),
       &dtype,
       &num,
-      &file_size);
+      &file_size));
   if (file_size && *static_cast<const uint64_t*>(file_size) < offset + size) {
     auto st =
         Status_Error("The number of bytes requested is bigger than the array");
@@ -585,22 +607,26 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_export(
     return TILEDB_ERR;
   }
 
-  Subarray subarray(context, array);
-  subarray.add_range(
-      0,
-      static_cast<uint64_t>(offset),
-      static_cast<uint64_t>(offset + size - 1));
-  Query query(context, array);
-  query.set_layout(TILEDB_ROW_MAJOR);
+  tiledb::sm::Subarray subarray(
+      array.get(), 
+      nullptr, 
+      context.storage_manager()->logger(), 
+      true,
+      context.storage_manager());
+  uint64_t subarray_range_arr[] = {static_cast<uint64_t>(offset), static_cast<uint64_t>(offset + size - 1)};
+  tiledb::type::Range subarray_range(static_cast<void*>(subarray_range_arr), sizeof(uint64_t) * 2);
+  throw_if_not_ok(subarray.add_range(0, std::move(subarray_range)));
+  
+  tiledb::sm::Query query(context.storage_manager(), array);
+  throw_if_not_ok(query.set_layout(tiledb::sm::Layout::ROW_MAJOR));
   query.set_subarray(subarray);
-  query.set_data_buffer(
-      tiledb::sm::constants::filestore_attribute_name, buf, size);
-  query.submit();
+  uint64_t size_tmp = size;
+  throw_if_not_ok(query.set_data_buffer(
+      tiledb::sm::constants::filestore_attribute_name, buf, &size_tmp));
+  throw_if_not_ok(query.submit());
 
   return TILEDB_OK;
 }
-
-*/
 
 TILEDB_EXPORT int32_t tiledb_filestore_size(
     tiledb_ctx_t* ctx, const char* filestore_array_uri, size_t* size) {
@@ -803,7 +829,6 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
   return api_entry<detail::tiledb_filestore_uri_import>(
       ctx, filestore_array_uri, file_uri, mime_type);
 }
-
 /*
 TILEDB_EXPORT int32_t tiledb_filestore_uri_export(
     tiledb_ctx_t* ctx,
@@ -812,7 +837,7 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_export(
   return api_entry<detail::tiledb_filestore_uri_export>(
       ctx, file_uri, filestore_array_uri);
 }
-
+*/
 TILEDB_EXPORT int32_t tiledb_filestore_buffer_import(
     tiledb_ctx_t* ctx,
     const char* filestore_array_uri,
@@ -832,8 +857,6 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_export(
   return api_entry<detail::tiledb_filestore_buffer_export>(
       ctx, filestore_array_uri, offset, buf, size);
 }
-
-*/
 
 TILEDB_EXPORT int32_t tiledb_filestore_size(
     tiledb_ctx_t* ctx, const char* filestore_array_uri, size_t* size) noexcept {
