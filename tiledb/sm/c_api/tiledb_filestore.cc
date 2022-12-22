@@ -41,15 +41,25 @@
 #include "tiledb/sm/c_api/api_argument_validator.h"
 #include "tiledb/sm/c_api/tiledb.h"
 #include "tiledb/sm/c_api/tiledb_experimental.h"
+#include "tiledb/sm/compressors/zstd_compressor.h"
 #include "tiledb/sm/enums/array_type.h"
+#include "tiledb/sm/enums/compressor.h"
+#include "tiledb/sm/enums/encryption_type.h"
+#include "tiledb/sm/enums/filter_type.h"
+#include "tiledb/sm/enums/layout.h"
 #include "tiledb/sm/enums/mime_type.h"
+#include "tiledb/sm/enums/query_type.h"
+#include "tiledb/sm/enums/vfs_mode.h"
 #include "tiledb/sm/filesystem/uri.h"
 #include "tiledb/sm/filesystem/vfs.h"
+#include "tiledb/sm/filter/compression_filter.h"
 #include "tiledb/sm/filter/filter_pipeline.h"
 #include "tiledb/sm/misc/mgc_dict.h"
+#include "tiledb/sm/misc/types.h"
 #include "tiledb/sm/query/query.h"
 #include "tiledb/sm/storage_manager/context.h"
 #include "tiledb/sm/subarray/subarray.h"
+#include "tiledb/type/range/range.h"
 
 namespace tiledb::common::detail {
 
@@ -61,7 +71,7 @@ std::pair<Status, optional<std::string>> libmagic_get_mime_encoding(
     void* data, uint64_t size);
 bool libmagic_file_is_compressed(void* data, uint64_t size);
 Status read_file_header(
-    const tiledb::sm::VFS& vfs, const char* uri, std::vector<char>& header);
+    tiledb::sm::VFS& vfs, const char* uri, std::vector<char>& header);
 std::pair<std::string, std::string> strip_file_extension(const char* file_uri);
 std::pair<Status, optional<uint64_t>> get_buffer_size_from_config(
     const tiledb::sm::Config& config, uint64_t tile_extent);
@@ -116,30 +126,42 @@ TILEDB_EXPORT int32_t tiledb_filestore_schema_create(
     // create copies of the underlying core objects from within
     // the cpp objects constructed here
     (*array_schema)->array_schema_ = make_shared<tiledb::sm::ArraySchema>(HERE(), tiledb::sm::ArrayType::DENSE);
+    auto& schema = (*array_schema)->array_schema_;
 
-    auto dim = tiledb::sm::Dimension(
+    // Define the range of the dimension.
+    uint64_t range_lo = 0;
+    uint64_t range_hi = std::numeric_limits<uint64_t>::max() - tile_extent - 1;
+    tiledb::type::Range range_obj(&range_lo, &range_hi, sizeof(uint64_t));
+
+    // Define the tile extent as a tiledb::sm::ByteVecValue.
+    std::vector<uint8_t> tile_extent_vec(sizeof(uint64_t), 0);
+    memcpy(tile_extent_vec.data(), &tile_extent, sizeof(uint64_t));
+
+    auto dim = make_shared<tiledb::sm::Dimension>(
+        HERE(),
         tiledb::sm::constants::filestore_dimension_name,
         tiledb::sm::Datatype::UINT64,
         1,
-        {0, std::numeric_limits<uint64_t>::max() - tile_extent - 1},
+        range_obj,
         tiledb::sm::FilterPipeline{},
-        tile_extent);
+        tiledb::sm::ByteVecValue(std::move(tile_extent_vec)));
 
-    Domain domain;
-    domain.add_dimension(dim);
+    auto domain = make_shared<tiledb::sm::Domain>(HERE());
+    throw_if_not_ok(domain.get()->add_dimension(dim));
 
-    auto attr = tiledb::sm::Attribute(tiledb::sm::constants::filestore_attribute_name, tiledb::sm::Datatype::BLOB);
+    auto attr = make_shared<tiledb::sm::Attribute>(HERE(), tiledb::sm::constants::filestore_attribute_name, tiledb::sm::Datatype::BLOB);
 
     // If the input file is not compressed, add our own compression
     if (!is_compressed_libmagic) {
       tiledb::sm::FilterPipeline filter;
-      filter.add_filter({TILEDB_FILTER_ZSTD});
-      attr.set_filter_pipeline(filter);
+      filter.add_filter(tiledb::sm::CompressionFilter(tiledb::sm::Compressor::ZSTD, tiledb::sm::ZStd::default_level()));
+      throw_if_not_ok(attr.get()->set_filter_pipeline(filter));
     }
 
-    schema.set_domain(domain);
-    schema.set_order({{TILEDB_ROW_MAJOR, TILEDB_ROW_MAJOR}});
-    schema.add_attribute(attr);
+    throw_if_not_ok(schema->set_domain(domain));
+    throw_if_not_ok(schema->set_tile_order(tiledb::sm::Layout::ROW_MAJOR));
+    throw_if_not_ok(schema->set_cell_order(tiledb::sm::Layout::ROW_MAJOR));
+    throw_if_not_ok(schema->add_attribute(attr));
   } catch (const std::exception& e) {
     auto st = Status_Error(
         std::string("Internal TileDB uncaught exception; ") + e.what());
@@ -152,7 +174,6 @@ TILEDB_EXPORT int32_t tiledb_filestore_schema_create(
   return TILEDB_OK;
 }
 
-/*
 TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
     tiledb_ctx_t* ctx,
     const char* filestore_array_uri,
@@ -167,15 +188,23 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
   tiledb::sm::Context context = ctx->context();
 
   // Get the file size
-  tiledb::sm::VFS vfs;
-  uint64_t file_size = vfs.file_size(std::string(file_uri));
+  tiledb::sm::VFS vfs(context.stats(), context.compute_tp(), context.io_tp(), context.storage_manager()->config());
+  uint64_t file_size;
+  throw_if_not_ok(vfs.file_size(tiledb::sm::URI(uri), &file_size));
   if (!file_size) {
     return TILEDB_OK;  // NOOP
   }
 
   // Sync up the fragment timestamp and metadata timestamp
   uint64_t time_now = tiledb_timestamp_now_ms();
-  tiledb::sm::Array array(tiledb::sm::URI(filestore_array_uri), TILEDB_WRITE, time_now);
+  auto array = make_shared<tiledb::sm::Array>(HERE(), tiledb::sm::URI(filestore_array_uri), context.storage_manager());
+  throw_if_not_ok(array->open(
+    tiledb::sm::QueryType::WRITE,
+    0,
+    time_now,
+    tiledb::sm::EncryptionType::NO_ENCRYPTION, 
+    nullptr, 
+    0));
 
   // Detect mimetype and encoding with libmagic
   uint64_t size = std::min(file_size, static_cast<uint64_t>(1024));
@@ -203,36 +232,37 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
 
   // We need to dump all the relevant metadata at this point so that
   // clients have all the necessary info when consuming the array
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_size_key,
-      TILEDB_UINT64,
+  array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_size_key.c_str(),
+      tiledb::sm::Datatype::UINT64,
       1,
       &file_size);
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_mime_encoding_key,
-      TILEDB_STRING_UTF8,
+  array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_mime_encoding_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(mime_encoding.value().size()),
       mime_encoding.value().c_str());
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_mime_type_key,
-      TILEDB_STRING_UTF8,
+  array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_mime_type_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(mime.value().size()),
       mime.value().c_str());
   auto&& [fname, fext] = strip_file_extension(file_uri);
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_original_filename_key,
-      TILEDB_STRING_UTF8,
+  array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_original_filename_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(fname.size()),
       fname.c_str());
-  array.put_metadata(
-      tiledb::sm::constants::filestore_metadata_file_extension_key,
-      TILEDB_STRING_UTF8,
+  array->put_metadata(
+      tiledb::sm::constants::filestore_metadata_file_extension_key.c_str(),
+      tiledb::sm::Datatype::STRING_UTF8,
       static_cast<uint32_t>(fext.size()),
       fext.c_str());
 
   // Write the data in batches using the global order writer
-  VFS::filebuf fb(vfs);
-  if (!fb.open(std::string(file_uri), std::ios::in)) {
+  tiledb::sm::VFS fb(vfs);
+  auto fb_open_status = fb.open(tiledb::sm::URI(file_uri), tiledb::sm::VFSMode::VFS_READ);
+  if (!fb.ok()) {
     auto st = Status_Error(
         "Failed to open the file; Invalid file URI or incorrect file "
         "permissions");
@@ -240,27 +270,30 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
     save_error(ctx, st);
     return TILEDB_ERR;
   }
-  std::istream input(&fb);
 
   // tiledb:// uri hack
   // We need to special case on tiledb uris until we implement
   // serialization for global order writes. Until then, we write
   // timestamped fragments in row-major order.
-  bool is_tiledb_uri = array.ptr()->array_->is_remote();
+  bool is_tiledb_uri = array->is_remote();
   uint64_t tile_extent = compute_tile_extent_based_on_file_size(file_size);
-  // TODO: FIX ARGUMENT
-  auto&& [st3, buffer_size] = get_buffer_size_from_config(context, tile_extent);
+  auto&& [st3, buffer_size] = get_buffer_size_from_config(context.storage_manager()->config(), tile_extent);
   if (!st3.ok()) {
     LOG_STATUS_NO_RETURN_VALUE(st3);
     save_error(ctx, st3);
     return TILEDB_ERR;
   }
 
-  Query query(context, array);
-  query.set_layout(TILEDB_GLOBAL_ORDER);
+  tiledb::sm::Query query(context.storage_manager(), array, tiledb::sm::QueryType::WRITE);
+  query.set_layout(tiledb::sm::Layout::GLOBAL_ORDER);
   std::vector<std::byte> buffer(*buffer_size);
 
-  Subarray subarray(context, array);
+  tiledb::sm::Subarray subarray(
+    array.get(), 
+    nullptr, 
+    context.storage_manager->logger(), 
+    true,
+    ctx->storage_manager());
   // We need to get the right end boundary of the last space tile.
   // The last chunk either falls exactly on the end of the file
   // or it goes beyond the end of the file so that it's equal in size
@@ -270,15 +303,23 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
        static_cast<uint64_t>(file_size % tile_extent != 0)) *
           tile_extent -
       1;
-  subarray.add_range(0, static_cast<uint64_t>(0), last_space_tile_boundary);
+  tiledb::type::Range subarray_range(static_cast<uint64_t>(0), last_space_tile_boundary);
+  subarray.add_range(0, static_cast<uint64_t>(0), std::move(subarray_range));
   query.set_subarray(subarray);
 
   auto tiledb_cloud_fix = [&](uint64_t start, uint64_t end, uint64_t nbytes) {
-    Query query(context, array);
-    query.set_layout(TILEDB_ROW_MAJOR);
-    Subarray subarray(context, array);
-    subarray.add_range(0, start, end);
-    query.set_subarray(subarray);
+    tiledb::sm::Query query(context.storage_manager(), array, tiledb::sm::QueryType::WRITE);
+    query.set_layout(tiledb::sm::Layout::ROW_MAJOR);
+    tiledb::sm::Subarray subarray_cloud_fix(
+      array.get(), 
+      nullptr, 
+      context.storage_manager->logger(), 
+      true,
+      ctx->storage_manager());
+
+    tiledb::type::Range subarray_range_cloud_fix(start, end);
+    subarray_cloud_fix.add_range(0, std::move(subarray_range_cloud_fix));
+    query.set_subarray(subarray_cloud_fix);
     query.set_data_buffer(
         tiledb::sm::constants::filestore_attribute_name, buffer.data(), nbytes);
     query.submit();
@@ -286,7 +327,8 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
 
   uint64_t start_range = 0;
   uint64_t end_range = *buffer_size - 1;
-  while (input.read(reinterpret_cast<char*>(buffer.data()), *buffer_size)) {
+  // TODO: very unsure about this section of code.
+  while (fb.read(tiledb::sm::URI(uri), start_range, reinterpret_cast<char*>(buffer.data()), *buffer_size).ok()) {
     if (is_tiledb_uri) {
       tiledb_cloud_fix(start_range, end_range, buffer.size());
       start_range += *buffer_size;
@@ -299,6 +341,8 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
       query.submit();
     }
   }
+
+  // YEET
 
   // If the end of the file was reached, but less than buffer_size bytes
   // were read, write the read bytes into the array.
@@ -338,6 +382,7 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
   return TILEDB_OK;
 }
 
+/*
 TILEDB_EXPORT int32_t tiledb_filestore_uri_export(
     tiledb_ctx_t* ctx, const char* file_uri, const char* filestore_array_uri) {
   if (sanity_check(ctx) == TILEDB_ERR || !filestore_array_uri || !file_uri) {
@@ -555,18 +600,29 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_export(
   return TILEDB_OK;
 }
 
+*/
+
 TILEDB_EXPORT int32_t tiledb_filestore_size(
     tiledb_ctx_t* ctx, const char* filestore_array_uri, size_t* size) {
   if (sanity_check(ctx) == TILEDB_ERR || !filestore_array_uri || !size) {
     return TILEDB_ERR;
   }
 
-  Context context(ctx, false);
-  Array array(context, std::string(filestore_array_uri), TILEDB_READ);
+  tiledb::sm::Context& context = ctx->context();
+  tiledb::sm::Array array(tiledb::sm::URI(filestore_array_uri), context.storage_manager());
+  
+  throw_if_not_ok(array.open(
+    tiledb::sm::QueryType::READ, 
+    tiledb::sm::EncryptionType::NO_ENCRYPTION, 
+    nullptr, 
+    0));
 
-  tiledb_datatype_t dtype;
-  if (!array.has_metadata(
-          tiledb::sm::constants::filestore_metadata_size_key, &dtype)) {
+  tiledb::sm::Datatype dtype;
+  bool has_key;
+  throw_if_not_ok(array.has_metadata_key(
+          tiledb::sm::constants::filestore_metadata_size_key.c_str(), &dtype, &has_key));
+
+  if (!has_key) {
     LOG_STATUS_NO_RETURN_VALUE(Status_Error(
         std::string("Filestore size key not found in array metadata; this "
                     "filestore may not have been imported: ") +
@@ -575,11 +631,11 @@ TILEDB_EXPORT int32_t tiledb_filestore_size(
   }
   uint32_t num;
   const void* file_size;
-  array.get_metadata(
-      tiledb::sm::constants::filestore_metadata_size_key,
+  throw_if_not_ok(array.get_metadata(
+      tiledb::sm::constants::filestore_metadata_size_key.c_str(),
       &dtype,
       &num,
-      &file_size);
+      &file_size));
   *size = *static_cast<const uint64_t*>(file_size);
 
   return TILEDB_OK;
@@ -601,7 +657,6 @@ tiledb_mime_type_from_str(const char* str, tiledb_mime_type_t* mime_type) {
   *mime_type = (tiledb_mime_type_t)val;
   return TILEDB_OK;
 }
-*/
 
 uint64_t compute_tile_extent_based_on_file_size(uint64_t file_size) {
   if (file_size > 1024ULL * 1024ULL * 1024ULL) {        // 1GB
@@ -685,16 +740,12 @@ bool libmagic_file_is_compressed(void* data, uint64_t size) {
 }
 
 Status read_file_header(
-    const tiledb::sm::VFS& vfs, const char* uri, std::vector<char>& header) {
-  tiledb::sm::VFS::filebuf fb(vfs);
-  if (!fb.open(uri, std::ios::in)) {
-    return Status_Error("the file couldn't be opened");
-  }
-  std::istream input(&fb);
-  if (!input.read(header.data(), header.size())) {
-    return Status_Error("the file couldn't be read");
-  }
-  fb.close();
+    tiledb::sm::VFS& vfs, const char* uri, std::vector<char>& header) {
+  // TODO: I am very unsure if this is right...
+  const tiledb::sm::URI uri_obj = tiledb::sm::URI(uri);
+  throw_if_not_ok(vfs.open_file(uri_obj, tiledb::sm::VFSMode::VFS_READ));
+  throw_if_not_ok(vfs.read(uri_obj, 0, header.data(), header.size()));
+  throw_if_not_ok(vfs.close_file(uri_obj));
   return Status::Ok();
 }
 
@@ -744,7 +795,6 @@ TILEDB_EXPORT int32_t tiledb_filestore_schema_create(
       ctx, uri, array_schema);
 }
 
-/*
 TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
     tiledb_ctx_t* ctx,
     const char* filestore_array_uri,
@@ -754,6 +804,7 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
       ctx, filestore_array_uri, file_uri, mime_type);
 }
 
+/*
 TILEDB_EXPORT int32_t tiledb_filestore_uri_export(
     tiledb_ctx_t* ctx,
     const char* file_uri,
@@ -782,6 +833,8 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_export(
       ctx, filestore_array_uri, offset, buf, size);
 }
 
+*/
+
 TILEDB_EXPORT int32_t tiledb_filestore_size(
     tiledb_ctx_t* ctx, const char* filestore_array_uri, size_t* size) noexcept {
   return api_entry<detail::tiledb_filestore_size>(
@@ -797,4 +850,3 @@ TILEDB_EXPORT int32_t tiledb_mime_type_from_str(
     const char* str, tiledb_mime_type_t* mime_type) noexcept {
   return api_entry_plain<detail::tiledb_mime_type_from_str>(str, mime_type);
 }
-*/
