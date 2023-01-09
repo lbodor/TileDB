@@ -1,11 +1,11 @@
 /**
- * @file tiledeb/api/c_api/object/test/unit_capi_object.cc
+ * @file context_resources.cc
  *
  * @section LICENSE
  *
  * The MIT License
  *
- * @copyright Copyright (c) 2022 TileDB Inc.
+ * @copyright Copyright (c) 2017-2021 TileDB, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -27,46 +27,32 @@
  *
  * @section DESCRIPTION
  *
- * Tests the object C API.
+ * This file implements class ContextResources.
  */
 
-#include <test/support/tdb_catch.h>
-#include "tiledb/api/c_api/object/object_api_external.h"
+#include "tiledb/sm/storage_manager/context_resources.h"
 
-#include <string>
+using namespace tiledb::common;
 
-struct TestCase {
-  TestCase(tiledb_walk_order_t order, const char* name, int defined_as)
-      : order_(order)
-      , name_(name)
-      , defined_as_(defined_as) {
-  }
+namespace tiledb::sm {
 
-  tiledb_walk_order_t order_;
-  const char* name_;
-  int defined_as_;
+/* ****************************** */
+/*   CONSTRUCTORS & DESTRUCTORS   */
+/* ****************************** */
 
-  void run() {
-    const char* c_str = nullptr;
-    tiledb_walk_order_t from_str;
-
-    REQUIRE(order_ == defined_as_);
-
-    REQUIRE(tiledb_walk_order_to_str(order_, &c_str) == TILEDB_OK);
-    REQUIRE(std::string(c_str) == name_);
-
-    REQUIRE(tiledb_walk_order_from_str(name_, &from_str) == TILEDB_OK);
-    REQUIRE(from_str == order_);
-  }
-};
-
-TEST_CASE("C API: Test object enum", "[capi][enums][object]") {
-  // clang-format off
-  TestCase test = GENERATE(
-    TestCase(TILEDB_PREORDER,   "PREORDER",   0),
-    TestCase(TILEDB_POSTORDER,  "POSTORDER",  1));
-
-  DYNAMIC_SECTION("[" << test.name_ << "]") {
-    test.run();
-  }
+ContextResources::ContextResources(
+    const Config& config,
+    size_t compute_thread_count,
+    size_t io_thread_count,
+    std::string stats_name)
+    : compute_tp_(compute_thread_count)
+    , io_tp_(io_thread_count)
+    , stats_(make_shared<stats::Stats>(HERE(), stats_name))
+    , vfs_(stats_.get(), &compute_tp_, &io_tp_, config) {
+  /*
+   * Explicitly register our `stats` object with the global.
+   */
+  stats::all_stats.register_stats(stats_);
 }
+
+}  // namespace tiledb::sm

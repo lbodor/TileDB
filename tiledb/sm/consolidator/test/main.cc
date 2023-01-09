@@ -1,11 +1,11 @@
 /**
- * @file tiledeb/api/c_api/object/test/unit_capi_object.cc
+ * @file tiledb/sm/consolidator/test/main.cc
  *
  * @section LICENSE
  *
  * The MIT License
  *
- * @copyright Copyright (c) 2022 TileDB Inc.
+ * @copyright Copyright (c) 2022 TileDB, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -27,46 +27,8 @@
  *
  * @section DESCRIPTION
  *
- * Tests the object C API.
+ * This file defines a test `main()`
  */
 
+#define CATCH_CONFIG_MAIN
 #include <test/support/tdb_catch.h>
-#include "tiledb/api/c_api/object/object_api_external.h"
-
-#include <string>
-
-struct TestCase {
-  TestCase(tiledb_walk_order_t order, const char* name, int defined_as)
-      : order_(order)
-      , name_(name)
-      , defined_as_(defined_as) {
-  }
-
-  tiledb_walk_order_t order_;
-  const char* name_;
-  int defined_as_;
-
-  void run() {
-    const char* c_str = nullptr;
-    tiledb_walk_order_t from_str;
-
-    REQUIRE(order_ == defined_as_);
-
-    REQUIRE(tiledb_walk_order_to_str(order_, &c_str) == TILEDB_OK);
-    REQUIRE(std::string(c_str) == name_);
-
-    REQUIRE(tiledb_walk_order_from_str(name_, &from_str) == TILEDB_OK);
-    REQUIRE(from_str == order_);
-  }
-};
-
-TEST_CASE("C API: Test object enum", "[capi][enums][object]") {
-  // clang-format off
-  TestCase test = GENERATE(
-    TestCase(TILEDB_PREORDER,   "PREORDER",   0),
-    TestCase(TILEDB_POSTORDER,  "POSTORDER",  1));
-
-  DYNAMIC_SECTION("[" << test.name_ << "]") {
-    test.run();
-  }
-}
