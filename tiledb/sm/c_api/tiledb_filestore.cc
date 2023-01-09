@@ -91,7 +91,7 @@ TILEDB_EXPORT int32_t tiledb_filestore_schema_create(
     // The user provided a uri, let's examine the file and get some insights
     // Get the file size, calculate a reasonable tile extent
     tiledb::sm::VFS vfs(
-        context.stats(),
+        &context.resources().stats(),
         context.compute_tp(),
         context.io_tp(),
         context.storage_manager()->config());
@@ -198,7 +198,7 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_import(
 
   // Get the file size
   tiledb::sm::VFS vfs(
-      context.stats(),
+      &context.resources().stats(),
       context.compute_tp(),
       context.io_tp(),
       context.storage_manager()->config());
@@ -417,7 +417,7 @@ TILEDB_EXPORT int32_t tiledb_filestore_uri_export(
 
   tiledb::sm::Context& context = ctx->context();
   tiledb::sm::VFS vfs(
-      context.stats(),
+      &context.resources().stats(),
       context.compute_tp(),
       context.io_tp(),
       context.storage_manager()->config());
@@ -660,8 +660,8 @@ TILEDB_EXPORT int32_t tiledb_filestore_buffer_export(
         "The array metadata doesn't contain the " +
         tiledb::sm::constants::filestore_metadata_size_key + "key"));
   } else if (*static_cast<const uint64_t*>(file_size) < offset + size) {
-    throw(Status_Error(
-      "The number of bytes requested is bigger than the array"));
+    throw(
+        Status_Error("The number of bytes requested is bigger than the array"));
   }
 
   tiledb::sm::Subarray subarray(
@@ -728,7 +728,8 @@ TILEDB_EXPORT int32_t tiledb_filestore_size(
       &file_size));
 
   if (!file_size) {
-    throw(std::logic_error("The array metadata should contain the " +
+    throw(std::logic_error(
+        "The array metadata should contain the " +
         tiledb::sm::constants::filestore_metadata_size_key + "key"));
   }
   *size = *static_cast<const uint64_t*>(file_size);
