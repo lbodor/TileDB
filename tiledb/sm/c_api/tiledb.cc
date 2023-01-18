@@ -2708,6 +2708,104 @@ int32_t tiledb_query_condition_alloc(
   return TILEDB_OK;
 }
 
+int32_t tiledb_query_condition_alloc_value(
+    tiledb_ctx_t* const ctx,
+    const char* const field_name,
+    const void* const condition_value,
+    const uint64_t condition_value_size,
+    const tiledb_query_condition_op_t op,
+    tiledb_query_condition_t** cond) {
+  if (sanity_check(ctx) == TILEDB_ERR) {
+    return TILEDB_ERR;
+  }
+
+  if (field_name == nullptr) {
+    return TILEDB_ERR;
+  }
+
+  // Create query condition struct
+  *cond = new (std::nothrow) tiledb_query_condition_t;
+  if (*cond == nullptr) {
+    auto st = Status_Error(
+        "Failed to create TileDB query condition object; Memory allocation "
+        "error");
+    LOG_STATUS_NO_RETURN_VALUE(st);
+    save_error(ctx, st);
+    return TILEDB_OOM;
+  }
+
+  // Create QueryCondition object
+  (*cond)->query_condition_ = new (std::nothrow) tiledb::sm::QueryCondition(
+      field_name,
+      condition_value,
+      condition_value_size,
+      static_cast<tiledb::sm::QueryConditionOp>(op));
+  if ((*cond)->query_condition_ == nullptr) {
+    auto st = Status_Error("Failed to allocate TileDB query condition object");
+    LOG_STATUS_NO_RETURN_VALUE(st);
+    save_error(ctx, st);
+    delete *cond;
+    *cond = nullptr;
+    return TILEDB_OOM;
+  }
+
+  // Success
+  return TILEDB_OK;
+}
+
+int32_t tiledb_query_condition_alloc_expr(
+    tiledb_ctx_t* const ctx,
+    tiledb_query_condition_t** const cond_list,
+    size_t cond_list_len,
+    const tiledb_query_condition_combination_op_t combination_op,
+    tiledb_query_condition_t** cond) {
+  if (sanity_check(ctx) == TILEDB_ERR) {
+    return TILEDB_ERR;
+  }
+
+  if (cond_list == nullptr) {
+    return TILEDB_ERR;
+  }
+
+  for (size_t i = 0; i < cond_list_len; i++) {
+    if (sanity_check(ctx, cond_list[i]) == TILEDB_ERR) {
+      return TILEDB_ERR;
+    }
+  }
+
+  // Create query condition struct
+  *cond = new (std::nothrow) tiledb_query_condition_t;
+  if (*cond == nullptr) {
+    auto st = Status_Error(
+        "Failed to create TileDB query condition object; Memory allocation "
+        "error");
+    LOG_STATUS_NO_RETURN_VALUE(st);
+    save_error(ctx, st);
+    return TILEDB_OOM;
+  }
+
+  std::vector<tiledb::sm::QueryCondition*> cond_vec(cond_list_len);
+  for (size_t i = 0; i < cond_list_len; ++i) {
+    cond_vec[i] = cond_list[i]->query_condition_;
+  }
+
+  // Create QueryCondition object
+  (*cond)->query_condition_ = new (std::nothrow) tiledb::sm::QueryCondition(
+      cond_vec,
+      static_cast<tiledb::sm::QueryConditionCombinationOp>(combination_op));
+  if ((*cond)->query_condition_ == nullptr) {
+    auto st = Status_Error("Failed to allocate TileDB query condition object");
+    LOG_STATUS_NO_RETURN_VALUE(st);
+    save_error(ctx, st);
+    delete *cond;
+    *cond = nullptr;
+    return TILEDB_OOM;
+  }
+
+  // Success
+  return TILEDB_OK;
+}
+
 void tiledb_query_condition_free(tiledb_query_condition_t** cond) {
   if (cond != nullptr && *cond != nullptr) {
     delete (*cond)->query_condition_;
@@ -6992,6 +7090,27 @@ int32_t tiledb_subarray_get_range_var_from_name(
 int32_t tiledb_query_condition_alloc(
     tiledb_ctx_t* const ctx, tiledb_query_condition_t** const cond) noexcept {
   return api_entry<tiledb::api::tiledb_query_condition_alloc>(ctx, cond);
+}
+
+int32_t tiledb_query_condition_alloc_value(
+    tiledb_ctx_t* const ctx,
+    const char* const field_name,
+    const void* const condition_value,
+    const uint64_t condition_value_size,
+    const tiledb_query_condition_op_t op,
+    tiledb_query_condition_t** const cond) noexcept {
+  return api_entry<tiledb::api::tiledb_query_condition_alloc_value>(
+      ctx, field_name, condition_value, condition_value_size, op, cond);
+}
+
+int32_t tiledb_query_condition_alloc_expr(
+    tiledb_ctx_t* const ctx,
+    tiledb_query_condition_t** const cond_list,
+    size_t cond_list_len,
+    const tiledb_query_condition_combination_op_t combination_op,
+    tiledb_query_condition_t** cond) noexcept {
+  return api_entry<tiledb::api::tiledb_query_condition_alloc_expr>(
+      ctx, cond_list, cond_list_len, combination_op, cond);
 }
 
 void tiledb_query_condition_free(tiledb_query_condition_t** cond) noexcept {
