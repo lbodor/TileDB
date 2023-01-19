@@ -39,7 +39,6 @@
 #include "tiledb/sm/array_schema/attribute.h"
 #include "tiledb/sm/array_schema/dimension.h"
 #include "tiledb/sm/c_api/api_argument_validator.h"
-#include "tiledb/sm/c_api/tiledb.h"
 #include "tiledb/sm/c_api/tiledb_experimental.h"
 #include "tiledb/sm/compressors/zstd_compressor.h"
 #include "tiledb/sm/enums/array_type.h"
@@ -163,6 +162,7 @@ int32_t tiledb_filestore_schema_create(
     throw_if_not_ok(schema->set_cell_order(tiledb::sm::Layout::ROW_MAJOR));
     throw_if_not_ok(schema->add_attribute(attr));
   } catch (const std::exception& e) {
+    (*array_schema)->array_schema_ = nullptr;
     delete *array_schema;
     throw std::logic_error(
         std::string("Internal TileDB uncaught exception; ") + e.what());
