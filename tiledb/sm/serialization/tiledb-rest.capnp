@@ -1051,3 +1051,7 @@ struct BufferedChunk {
   size@1 :UInt64;
   # the size in bytes of the intermediate chunk
 }
+
+struct ArrayFragments {
+  uris @0 :List(Text);
+}
