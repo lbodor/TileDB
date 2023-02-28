@@ -31,6 +31,7 @@
  */
 
 #include "tiledb/common/common.h"
+#include "tiledb/common/unreachable.h"
 
 #include "tiledb/common/logger.h"
 #include "tiledb/sm/storage_manager/context.h"
@@ -49,7 +50,10 @@ namespace sm {
 Context::Context(const Config& config)
     : last_error_(nullopt)
     , logger_(make_shared<Logger>(
-          HERE(), logger_prefix_ + std::to_string(++logger_id_)))
+          HERE(),
+          logger_prefix_ + std::to_string(++logger_id_),
+          get_log_level(config),
+          get_log_format(config)))
     , resources_(
           config,
           logger_,
@@ -60,10 +64,7 @@ Context::Context(const Config& config)
           // it is part of the public facing API.
           "Context.StorageManager")
     , storage_manager_{resources_, logger_, config} {
-  /*
-   * Logger class is not yet C.41-compliant
-   */
-  throw_if_not_ok(init_loggers(config));
+  check_logger_config(config);
 }
 
 /* ****************************** */
@@ -201,35 +202,59 @@ size_t Context::get_io_thread_count(const Config& config) {
       std::max(config_thread_count, io_concurrency_level));
 }
 
-Status Context::init_loggers(const Config& config) {
-  // temporarily set level to error so that possible errors reading
-  // configuration are visible to the user
-  logger_->set_level(Logger::Level::ERR);
-
-  const char* format_conf;
-  RETURN_NOT_OK(config.get("config.logging_format", &format_conf));
-  assert(format_conf != nullptr);
-  Logger::Format format = Logger::Format::DEFAULT;
-  RETURN_NOT_OK(logger_format_from_string(format_conf, &format));
-
-  global_logger(format);
-  logger_->set_format(static_cast<Logger::Format>(format));
-
-  // set logging level from config
-  bool found = false;
-  uint32_t level = static_cast<unsigned int>(Logger::Level::ERR);
-  RETURN_NOT_OK(config.get<uint32_t>("config.logging_level", &level, &found));
-  assert(found);
-  if (level > static_cast<unsigned int>(Logger::Level::TRACE)) {
-    return logger_->status(Status_StorageManagerError(
-        "Cannot set logger level; Unsupported level:" + std::to_string(level) +
-        "set in configuration"));
+Logger::Format Context::get_log_format(const Config& config) noexcept {
+  auto opt = config.get<std::string>("config.logging_format");
+  if (!opt.has_value()) {
+    return Logger::Format::DEFAULT;
   }
 
-  global_logger().set_level(static_cast<Logger::Level>(level));
-  logger_->set_level(static_cast<Logger::Level>(level));
+  Logger::Format format = Logger::Format::DEFAULT;
+  if (!logger_format_from_string(opt.value(), &format).ok()) {
+    return Logger::Format::DEFAULT;
+  }
 
-  return Status::Ok();
+  return format;
+}
+
+Logger::Level Context::get_log_level(const Config& config) noexcept {
+  uint64_t level = static_cast<uint64_t>(Logger::Level::ERR);
+  uint64_t max_level = static_cast<uint64_t>(Logger::Level::TRACE);
+  try {
+    auto opt = config.get<uint64_t>("config.logging_level");
+    level = std::min(max_level, opt.value());
+    return static_cast<Logger::Level>(level);
+  } catch (...) {
+    return Logger::Level::ERR;
+  }
+
+  stdx::unreachable();
+}
+
+void Context::check_logger_config(const Config& config) noexcept {
+  try {
+    auto cfg_format = config.get<std::string>("config.logging_format");
+    if (cfg_format.has_value()) {
+      if (*cfg_format != "DEFAULT" && *cfg_format != "JSON") {
+        logger_->error("Ignored invalid logging format: " + *cfg_format);
+      }
+    } else {
+      logger_->error("Missing config setting: config.logging_format");
+    }
+
+    auto cfg_level = config.get<std::string>("config.logging_level");
+    if (cfg_level.has_value()) {
+      if (*cfg_level != "0" && *cfg_level != "1" && *cfg_level != "2" &&
+          *cfg_level != "3" && *cfg_level != "4" && *cfg_level != "5") {
+        logger_->error("Ignored invalid logging level: " + *cfg_level);
+      }
+    } else {
+      logger_->error("Missing config setting: config.logging_level");
+    }
+  } catch (std::exception& exc) {
+    logger_->error(std::string("Error checking logging config: ") + exc.what());
+  } catch (...) {
+    logger_->error("Unknown error while checking logging config.");
+  }
 }
 
 }  // namespace sm

@@ -47,7 +47,10 @@ namespace tiledb::common {
 /* ********************************* */
 
 Logger::Logger(
-    const std::string& name, const Logger::Format format, const bool root)
+    const std::string& name,
+    const Logger::Level level,
+    const Logger::Format format,
+    const bool root)
     : name_(name)
     , root_(root) {
   logger_ = spdlog::get(name_);
@@ -64,8 +67,15 @@ Logger::Logger(
     logger_->set_pattern("{\n \"log\": [");
     logger_->critical("");
   }
-  set_level(Logger::Level::ERR);
+  set_level(level);
   set_format(format);
+
+  // HACK: This is very much the wrong place to be initializing the
+  // global logger. For now, we're leaving this to match the behavior
+  // of the old Context::init_loggers() call.
+  if (!root_) {
+    global_logger(level, format);
+  }
 }
 
 Logger::Logger(shared_ptr<spdlog::logger> logger) {
@@ -280,7 +290,7 @@ std::string Logger::add_tag(const std::string& tag, uint64_t id) {
 /*              GLOBAL               */
 /* ********************************* */
 
-Logger& global_logger(Logger::Format format) {
+Logger& global_logger(Logger::Level level, Logger::Format format) {
   static auto ts_micro =
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::system_clock::now().time_since_epoch())
@@ -289,7 +299,7 @@ Logger& global_logger(Logger::Format format) {
       (format == Logger::Format::JSON) ?
           "\"" + std::to_string(ts_micro) + "-Global\":\"1\"" :
           std::to_string(ts_micro) + "-Global";
-  static Logger l(name, format, true);
+  static Logger l(name, level, format, true);
   return l;
 }
 

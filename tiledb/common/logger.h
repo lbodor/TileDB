@@ -75,6 +75,7 @@ class Logger {
   /** Constructors */
   Logger(
       const std::string& name,
+      const Logger::Level level = Logger::Level::ERR,
       const Logger::Format format = Logger::Format::DEFAULT,
       const bool root = false);
 
@@ -422,7 +423,9 @@ class Logger {
  *
  * @param format The output format of the logger
  */
-Logger& global_logger(Logger::Format format = Logger::Format::DEFAULT);
+Logger& global_logger(
+    Logger::Level level = Logger::Level::ERR,
+    Logger::Format format = Logger::Format::DEFAULT);
 
 /**
  * Returns the logger format type given a string representation.
