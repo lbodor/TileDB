@@ -373,18 +373,11 @@ void fragments_timestamps_to_capnp(
   array_fragments_builder->setEndTimestamp(end_timestamp);
 }
 
-void fragments_timestamps_from_capnp(
-    const capnp::ArrayFragmentsTimestamps::Reader& array_fragments_reader,
-    uint64_t& start_timestamp,
-    uint64_t& end_timestamp) {
-  start_timestamp = array_fragments_reader.getStartTimestamp();
-  end_timestamp = array_fragments_reader.getEndTimestamp();
-
-  if (start_timestamp > end_timestamp) {
-    throw std::logic_error(
-        "[fragments_timestamps_from_capnp] Deserialized timestamps are "
-        "invalid");
-  }
+std::tuple<uint64_t, uint64_t> fragments_timestamps_from_capnp(
+    const capnp::ArrayFragmentsTimestamps::Reader& array_fragments_reader) {
+  return {
+      array_fragments_reader.getStartTimestamp(),
+      array_fragments_reader.getEndTimestamp()};
 }
 
 void fragments_timestamps_serialize(
@@ -439,11 +432,8 @@ void fragments_timestamps_serialize(
   }
 }
 
-void fragments_timestamps_deserialize(
-    uint64_t& start_timestamp,
-    uint64_t& end_timestamp,
-    SerializationType serialize_type,
-    const Buffer& serialized_buffer) {
+std::tuple<uint64_t, uint64_t> fragments_timestamps_deserialize(
+    SerializationType serialize_type, const Buffer& serialized_buffer) {
   try {
     switch (serialize_type) {
       case SerializationType::JSON: {
@@ -456,8 +446,7 @@ void fragments_timestamps_deserialize(
             builder);
         auto reader = builder.asReader();
         // Deserialize
-        fragments_timestamps_from_capnp(reader, start_timestamp, end_timestamp);
-        break;
+        return fragments_timestamps_from_capnp(reader);
       }
       case SerializationType::CAPNP: {
         const auto mBytes =
@@ -467,8 +456,7 @@ void fragments_timestamps_deserialize(
             serialized_buffer.size() / sizeof(::capnp::word)));
         auto reader = msg_reader.getRoot<capnp::ArrayFragmentsTimestamps>();
         // Deserialize
-        fragments_timestamps_from_capnp(reader, start_timestamp, end_timestamp);
-        break;
+        return fragments_timestamps_from_capnp(reader);
       }
       default: {
         throw ArraySerializationStatusException(
@@ -498,16 +486,20 @@ void fragments_list_to_capnp(
   }
 }
 
-void fragments_list_from_capnp(
+std::vector<URI> fragments_list_from_capnp(
     const capnp::ArrayFragmentsList::Reader& array_fragments_list_reader,
-    std::vector<URI>& fragments,
     const URI& array_uri) {
   if (array_fragments_list_reader.hasEntries()) {
+    std::vector<URI> fragments;
     fragments.reserve(array_fragments_list_reader.getEntries().size());
     for (auto entry : array_fragments_list_reader.getEntries()) {
       fragments.emplace_back(
           deserialize_array_uri_to_absolute(entry.cStr(), array_uri));
     }
+    return fragments;
+  } else {
+    throw ArraySerializationStatusException(
+        "[fragments_list_deserialize] There are no fragments to deserialize");
   }
 }
 
@@ -566,8 +558,7 @@ void fragments_list_serialize(
   }
 }
 
-void fragments_list_deserialize(
-    std::vector<URI>& fragments,
+std::vector<URI> fragments_list_deserialize(
     const URI& array_uri,
     SerializationType serialize_type,
     const Buffer& serialized_buffer) {
@@ -587,8 +578,7 @@ void fragments_list_deserialize(
             builder);
         auto reader = builder.asReader();
         // Deserialize
-        fragments_list_from_capnp(reader, fragments, array_uri);
-        break;
+        return fragments_list_from_capnp(reader, array_uri);
       }
       case SerializationType::CAPNP: {
         const auto mBytes =
@@ -598,8 +588,7 @@ void fragments_list_deserialize(
             serialized_buffer.size() / sizeof(::capnp::word)));
         auto reader = msg_reader.getRoot<capnp::ArrayFragmentsList>();
         // Deserialize
-        fragments_list_from_capnp(reader, fragments, array_uri);
-        break;
+        return fragments_list_from_capnp(reader, array_uri);
       }
       default: {
         throw ArraySerializationStatusException(
@@ -962,8 +951,8 @@ void fragments_timestamps_serialize(
       "Cannot serialize; serialization not enabled.");
 }
 
-void fragments_timestamps_deserialize(
-    uint64_t&, uint64_t&, SerializationType, const Buffer&) {
+std::tuple<uint64_t, uint64_t> fragments_timestamps_deserialize(
+    SerializationType, const Buffer&) {
   throw ArraySerializationStatusException(
       "Cannot deserialize; serialization not enabled.");
 }
@@ -974,8 +963,8 @@ void fragments_list_serialize(
       "Cannot serialize; serialization not enabled.");
 }
 
-void fragments_list_deserialize(
-    std::vector<URI>&, const URI&, SerializationType, const Buffer&) {
+std::vector<URI> fragments_list_deserialize(
+    const URI&, SerializationType, const Buffer&) {
   throw ArraySerializationStatusException(
       "Cannot deserialize; serialization not enabled.");
 }
