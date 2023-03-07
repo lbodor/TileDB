@@ -54,6 +54,10 @@ if (NOT WebP_FOUND AND NOT TILEDB_FORCE_ALL_DEPS)
     NAMES
       ${CMAKE_STATIC_LIBRARY_PREFIX}webpmux${CMAKE_STATIC_LIBRARY_SUFFIX}
   )
+  find_library(SHARPYUV_LIBRARIES
+    NAMES
+      ${CMAKE_STATIC_LIBRARY_PREFIX}sharpyuv${CMAKE_STATIC_LIBRARY_SUFFIX}
+  )
   find_path(WEBP_INCLUDE_DIR
     NAMES webp/decode.h
     PATH_SUFFIXES include
@@ -65,6 +69,7 @@ if (NOT WebP_FOUND AND NOT TILEDB_FORCE_ALL_DEPS)
       WEBPDECODER_LIBRARIES
       WEBPDEMUX_LIBRARIES
       WEBPMUX_LIBRARIES
+      SHARPYUV_LIBRARIES
       WEBP_INCLUDE_DIR
   )
 endif()
@@ -148,6 +153,14 @@ if (WebP_FOUND AND NOT TARGET WebP::webpmux)
   )
 endif()
 
+if (WebP_FOUND AND NOT TARGET WebP::sharpyuv)
+  add_library(WebP::sharpyuv UNKNOWN IMPORTED)
+  set_target_properties(WebP::sharpyuv PROPERTIES
+    IMPORTED_LOCATION "${SHARPYUV_LIBRARIES}"
+    INTERFACE_INCLUDE_DIRECTORIES "${WEBP_INCLUDE_DIR}"
+  )
+endif()
+
 # Always building static EP, install it..
 if (TILEDB_WEBP_EP_BUILT AND TILEDB_INSTALL_STATIC_DEPS)
   # One install_target_libs() with all of these was only installing the first item.
@@ -155,4 +168,5 @@ if (TILEDB_WEBP_EP_BUILT AND TILEDB_INSTALL_STATIC_DEPS)
   install_target_libs(WebP::webpdecoder)
   install_target_libs(WebP::webpdemux)
   install_target_libs(WebP::webpmux)
+  install_target_libs(WebP::sharpyuv)
 endif()

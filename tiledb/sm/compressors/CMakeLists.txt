@@ -72,7 +72,7 @@ if (TILEDB_WEBP)
   else() #if (NOT WIN32)
     # On Linux, must explicitly link -lpthread -ldl in order for static linking
     # to libzstd or libcurl to work.
-    target_link_libraries(unit_link_webp WebP::webp WebP::webpdecoder WebP::webpdemux WebP::webpmux pthread dl)
+    target_link_libraries(unit_link_webp WebP::webp WebP::webpdecoder WebP::webpdemux WebP::webpmux WebP::sharpyuv pthread dl)
   endif()
   target_sources(
       unit_link_webp
